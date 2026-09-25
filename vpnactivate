@@ -17,7 +17,7 @@ if [ -z "$BASH_VERSION" ]; then
 fi
 
 # ------------------------------------------
-# Detect distribution
+# Detect Linux distribution
 # ------------------------------------------
 
 if [ ! -f /etc/os-release ]; then
@@ -28,7 +28,6 @@ fi
 . /etc/os-release
 
 case "$ID" in
-
     arch|endeavouros|manjaro|garuda|cachyos)
         DISTRO="arch"
         ;;
@@ -59,7 +58,6 @@ case "$ID" in
                 ;;
         esac
         ;;
-
 esac
 
 echo
@@ -71,7 +69,6 @@ echo
 # ------------------------------------------
 
 case "$DISTRO" in
-
     arch)
         sudo pacman -S --needed networkmanager wireguard-tools
         ;;
@@ -84,7 +81,6 @@ case "$DISTRO" in
         sudo apt update
         sudo apt install -y network-manager wireguard-tools
         ;;
-
 esac
 
 # ------------------------------------------
@@ -94,7 +90,7 @@ esac
 sudo systemctl enable --now NetworkManager
 
 # ------------------------------------------
-# Find newest .conf file
+# Find newest WireGuard .conf file
 # ------------------------------------------
 
 DOWNLOADS="$HOME/Downloads"
@@ -119,6 +115,7 @@ if [ -z "$LATEST_CONF" ]; then
     exit 1
 fi
 
+echo
 echo "Found latest WireGuard config:"
 echo "$LATEST_CONF"
 echo
@@ -128,6 +125,8 @@ echo
 # ------------------------------------------
 
 TEMP_CONF="$DOWNLOADS/proton.conf"
+
+rm -f "$TEMP_CONF"
 
 cp "$LATEST_CONF" "$TEMP_CONF"
 
@@ -167,8 +166,8 @@ if [ -z "$NEW_UUID" ]; then
 fi
 
 # ------------------------------------------
-# Remove an existing "proton" connection
-# if one exists and isn't the new connection
+# Remove existing "proton" connection
+# if it is not the newly imported one
 # ------------------------------------------
 
 EXISTING_UUID=$(nmcli -t -f NAME,UUID connection show |
@@ -179,7 +178,7 @@ if [ -n "$EXISTING_UUID" ] && [ "$EXISTING_UUID" != "$NEW_UUID" ]; then
 fi
 
 # ------------------------------------------
-# Rename new connection to "proton"
+# Rename imported connection to "proton"
 # ------------------------------------------
 
 sudo nmcli connection modify \
@@ -187,7 +186,7 @@ sudo nmcli connection modify \
     connection.id "proton"
 
 # ------------------------------------------
-# Disable automatic VPN connection
+# Disable automatic connection
 # ------------------------------------------
 
 sudo nmcli connection modify \
@@ -195,16 +194,16 @@ sudo nmcli connection modify \
     connection.autoconnect no
 
 # ------------------------------------------
-# Set up Bash aliases
+# Create Bash aliases
 # ------------------------------------------
 
 BASHRC="$HOME/.bashrc"
 
-# Remove old aliases
+# Remove old ProtonVPN aliases
 sed -i '/^[[:space:]]*alias vpnon=/d' "$BASHRC"
 sed -i '/^[[:space:]]*alias vpnoff=/d' "$BASHRC"
 
-# Add new aliases
+# Add aliases
 cat >> "$BASHRC" <<'EOF'
 
 # ProtonVPN WireGuard
@@ -213,13 +212,13 @@ alias vpnoff='sudo nmcli connection down proton'
 EOF
 
 # ------------------------------------------
-# Load aliases into current Bash session
+# Final autoconnect setting
 # ------------------------------------------
 
-source "$BASHRC"
+sudo nmcli connection modify proton connection.autoconnect no
 
 # ------------------------------------------
-# Verify everything
+# Finished
 # ------------------------------------------
 
 echo
@@ -227,21 +226,28 @@ echo "=========================================="
 echo " ProtonVPN setup complete!"
 echo "=========================================="
 echo
-echo "Distribution: $PRETTY_NAME"
-echo
 echo "Config imported:"
 echo "$LATEST_CONF"
 echo
 echo "NetworkManager connection:"
 echo "proton"
 echo
+echo "Automatic connection:"
+echo "disabled"
+echo
 echo "Commands:"
 echo
 echo "  vpnon   -> Connect to ProtonVPN"
 echo "  vpnoff  -> Disconnect from ProtonVPN"
 echo
-echo "Aliases:"
-alias vpnon
-alias vpnoff
+echo "IMPORTANT:"
+echo "Run this once in your terminal:"
+echo
+echo "  source ~/.bashrc"
+echo
+echo "Then you can use:"
+echo
+echo "  vpnon"
+echo "  vpnoff"
 echo
 echo "=========================================="
