@@ -20,8 +20,6 @@ unalias vpnoff 2>/dev/null || true
 
 rm -f ~/Downloads/proton.conf
 
-source ~/.bashrc
-
 # ------------------------------------------
 # Make sure we are running Bash
 # ------------------------------------------
