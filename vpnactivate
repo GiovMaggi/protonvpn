@@ -8,6 +8,21 @@
 set -e
 
 # ------------------------------------------
+# Clean previous ProtonVPN setup
+# ------------------------------------------
+
+sudo nmcli connection delete proton 2>/dev/null || true
+
+sed -i '/^[[:space:]]*# ProtonVPN WireGuard$/d;/^[[:space:]]*alias vpnon=/d;/^[[:space:]]*alias vpnoff=/d' ~/.bashrc
+
+unalias vpnon 2>/dev/null || true
+unalias vpnoff 2>/dev/null || true
+
+rm -f ~/Downloads/proton.conf
+
+source ~/.bashrc
+
+# ------------------------------------------
 # Make sure we are running Bash
 # ------------------------------------------
 
@@ -215,6 +230,12 @@ EOF
 sudo nmcli connection modify proton connection.autoconnect no
 
 # ------------------------------------------
+# Reload Bash configuration
+# ------------------------------------------
+
+source "$HOME/.bashrc"
+
+# ------------------------------------------
 # Finish
 # ------------------------------------------
 
@@ -239,12 +260,5 @@ echo "Commands:"
 echo
 echo "  vpnon   -> Connect to ProtonVPN"
 echo "  vpnoff  -> Disconnect from ProtonVPN"
-echo
-echo "IMPORTANT:"
-echo "Run this once after the script finishes:"
-echo
-echo "  source ~/.bashrc"
-echo
-echo "Then use vpnon or vpnoff."
 echo
 echo "=========================================="
