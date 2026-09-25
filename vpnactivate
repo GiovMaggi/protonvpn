@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+
+# ==========================================
+# PROTONVPN WIREGUARD
+# Arch / Fedora / Debian based distros
+# ==========================================
+
+set -e
+
+# ------------------------------------------
+# Make sure we are running Bash
+# ------------------------------------------
+
+if [ -z "$BASH_VERSION" ]; then
+    echo "ERROR: This script must be run with Bash."
+    exit 1
+fi
+
+# ------------------------------------------
+# Detect distribution
+# ------------------------------------------
+
+if [ ! -f /etc/os-release ]; then
+    echo "ERROR: Cannot determine Linux distribution."
+    exit 1
+fi
+
+. /etc/os-release
+
+case "$ID" in
+
+    arch|endeavouros|manjaro|garuda|cachyos)
+        DISTRO="arch"
+        ;;
+
+    fedora)
+        DISTRO="fedora"
+        ;;
+
+    debian|ubuntu|linuxmint|pop)
+        DISTRO="debian"
+        ;;
+
+    *)
+        case "${ID_LIKE:-}" in
+            *arch*)
+                DISTRO="arch"
+                ;;
+            *fedora*|*rhel*)
+                DISTRO="fedora"
+                ;;
+            *debian*|*ubuntu*)
+                DISTRO="debian"
+                ;;
+            *)
+                echo "ERROR: Unsupported distribution: $ID"
+                echo "Supported: Arch-based, Fedora-based, Debian/Ubuntu-based"
+                exit 1
+                ;;
+        esac
+        ;;
+
+esac
+
+echo
+echo "Detected distribution family: $DISTRO"
+echo
+
+# ------------------------------------------
+# Install required packages
+# ------------------------------------------
+
+case "$DISTRO" in
+
+    arch)
+        sudo pacman -S --needed networkmanager wireguard-tools
+        ;;
+
+    fedora)
+        sudo dnf install -y NetworkManager wireguard-tools
+        ;;
+
+    debian)
+        sudo apt update
+        sudo apt install -y network-manager wireguard-tools
+        ;;
+
+esac
+
+# ------------------------------------------
+# Enable and start NetworkManager
+# ------------------------------------------
+
+sudo systemctl enable --now NetworkManager
+
+# ------------------------------------------
+# Find newest .conf file
+# ------------------------------------------
+
+DOWNLOADS="$HOME/Downloads"
+
+if [ ! -d "$DOWNLOADS" ]; then
+    echo "ERROR: ~/Downloads does not exist."
+    exit 1
+fi
+
+LATEST_CONF=$(find "$DOWNLOADS" \
+    -maxdepth 1 \
+    -type f \
+    -name '*.conf' \
+    ! -name 'proton.conf' \
+    -printf '%T@ %p\n' 2>/dev/null |
+    sort -nr |
+    head -n 1 |
+    cut -d' ' -f2-)
+
+if [ -z "$LATEST_CONF" ]; then
+    echo "ERROR: No .conf file found in ~/Downloads"
+    exit 1
+fi
+
+echo "Found latest WireGuard config:"
+echo "$LATEST_CONF"
+echo
+
+# ------------------------------------------
+# Create temporary valid filename
+# ------------------------------------------
+
+TEMP_CONF="$DOWNLOADS/proton.conf"
+
+cp "$LATEST_CONF" "$TEMP_CONF"
+
+# ------------------------------------------
+# Remember existing connections
+# ------------------------------------------
+
+BEFORE=$(nmcli -t -f UUID connection show)
+
+# ------------------------------------------
+# Import WireGuard configuration
+# ------------------------------------------
+
+echo "Importing WireGuard configuration..."
+
+sudo nmcli connection import \
+    type wireguard \
+    file "$TEMP_CONF"
+
+# Remove temporary file
+rm -f "$TEMP_CONF"
+
+# ------------------------------------------
+# Find newly imported connection
+# ------------------------------------------
+
+NEW_UUID=$(nmcli -t -f UUID connection show | while IFS= read -r uuid; do
+    if ! printf '%s\n' "$BEFORE" | grep -Fxq "$uuid"; then
+        printf '%s\n' "$uuid"
+        break
+    fi
+done)
+
+if [ -z "$NEW_UUID" ]; then
+    echo "ERROR: Could not find the newly imported WireGuard connection."
+    exit 1
+fi
+
+# ------------------------------------------
+# Remove an existing "proton" connection
+# if one exists and isn't the new connection
+# ------------------------------------------
+
+EXISTING_UUID=$(nmcli -t -f NAME,UUID connection show |
+    awk -F: '$1 == "proton" {print $2; exit}')
+
+if [ -n "$EXISTING_UUID" ] && [ "$EXISTING_UUID" != "$NEW_UUID" ]; then
+    sudo nmcli connection delete uuid "$EXISTING_UUID"
+fi
+
+# ------------------------------------------
+# Rename new connection to "proton"
+# ------------------------------------------
+
+sudo nmcli connection modify \
+    "$NEW_UUID" \
+    connection.id "proton"
+
+# ------------------------------------------
+# Disable automatic VPN connection
+# ------------------------------------------
+
+sudo nmcli connection modify \
+    proton \
+    connection.autoconnect no
+
+# ------------------------------------------
+# Set up Bash aliases
+# ------------------------------------------
+
+BASHRC="$HOME/.bashrc"
+
+# Remove old aliases
+sed -i '/^[[:space:]]*alias vpnon=/d' "$BASHRC"
+sed -i '/^[[:space:]]*alias vpnoff=/d' "$BASHRC"
+
+# Add new aliases
+cat >> "$BASHRC" <<'EOF'
+
+# ProtonVPN WireGuard
+alias vpnon='sudo nmcli connection up proton'
+alias vpnoff='sudo nmcli connection down proton'
+EOF
+
+# ------------------------------------------
+# Load aliases into current Bash session
+# ------------------------------------------
+
+source "$BASHRC"
+
+# ------------------------------------------
+# Verify everything
+# ------------------------------------------
+
+echo
+echo "=========================================="
+echo " ProtonVPN setup complete!"
+echo "=========================================="
+echo
+echo "Distribution: $PRETTY_NAME"
+echo
+echo "Config imported:"
+echo "$LATEST_CONF"
+echo
+echo "NetworkManager connection:"
+echo "proton"
+echo
+echo "Commands:"
+echo
+echo "  vpnon   -> Connect to ProtonVPN"
+echo "  vpnoff  -> Disconnect from ProtonVPN"
+echo
+echo "Aliases:"
+alias vpnon
+alias vpnoff
+echo
+echo "=========================================="
