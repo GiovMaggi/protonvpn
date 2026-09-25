@@ -17,7 +17,7 @@ if [ -z "$BASH_VERSION" ]; then
 fi
 
 # ------------------------------------------
-# Detect Linux distribution
+# Detect distribution
 # ------------------------------------------
 
 if [ ! -f /etc/os-release ]; then
@@ -90,7 +90,7 @@ esac
 sudo systemctl enable --now NetworkManager
 
 # ------------------------------------------
-# Find newest WireGuard .conf file
+# Find newest .conf file in Downloads
 # ------------------------------------------
 
 DOWNLOADS="$HOME/Downloads"
@@ -127,8 +127,10 @@ echo
 TEMP_CONF="$DOWNLOADS/proton.conf"
 
 rm -f "$TEMP_CONF"
-
 cp "$LATEST_CONF" "$TEMP_CONF"
+
+# Make sure temporary file is removed if script exits
+trap 'rm -f "$TEMP_CONF"' EXIT
 
 # ------------------------------------------
 # Remember existing connections
@@ -145,9 +147,6 @@ echo "Importing WireGuard configuration..."
 sudo nmcli connection import \
     type wireguard \
     file "$TEMP_CONF"
-
-# Remove temporary file
-rm -f "$TEMP_CONF"
 
 # ------------------------------------------
 # Find newly imported connection
@@ -194,16 +193,14 @@ sudo nmcli connection modify \
     connection.autoconnect no
 
 # ------------------------------------------
-# Create Bash aliases
+# Set up Bash aliases
 # ------------------------------------------
 
 BASHRC="$HOME/.bashrc"
 
-# Remove old ProtonVPN aliases
 sed -i '/^[[:space:]]*alias vpnon=/d' "$BASHRC"
 sed -i '/^[[:space:]]*alias vpnoff=/d' "$BASHRC"
 
-# Add aliases
 cat >> "$BASHRC" <<'EOF'
 
 # ProtonVPN WireGuard
@@ -218,13 +215,16 @@ EOF
 sudo nmcli connection modify proton connection.autoconnect no
 
 # ------------------------------------------
-# Finished
+# Finish
 # ------------------------------------------
 
 echo
 echo "=========================================="
 echo " ProtonVPN setup complete!"
 echo "=========================================="
+echo
+echo "Distribution:"
+echo "$PRETTY_NAME"
 echo
 echo "Config imported:"
 echo "$LATEST_CONF"
@@ -241,13 +241,10 @@ echo "  vpnon   -> Connect to ProtonVPN"
 echo "  vpnoff  -> Disconnect from ProtonVPN"
 echo
 echo "IMPORTANT:"
-echo "Run this once in your terminal:"
+echo "Run this once after the script finishes:"
 echo
 echo "  source ~/.bashrc"
 echo
-echo "Then you can use:"
-echo
-echo "  vpnon"
-echo "  vpnoff"
+echo "Then use vpnon or vpnoff."
 echo
 echo "=========================================="
