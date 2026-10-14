@@ -3,22 +3,12 @@
 # ==========================================
 # PROTONVPN WIREGUARD
 # Arch / Fedora / Debian based distros
+#
+# Imports the newest ProtonVPN WireGuard config from your Downloads
+# folder as the NetworkManager connection "proton" and adds the
+# vpnon / vpnoff aliases. Re-run it with a new config (e.g. another
+# country) to replace the existing "proton" connection.
 # ==========================================
-
-set -e
-
-# ------------------------------------------
-# Clean previous ProtonVPN setup
-# ------------------------------------------
-
-sudo nmcli connection delete proton 2>/dev/null || true
-
-sed -i '/^[[:space:]]*# ProtonVPN WireGuard$/d;/^[[:space:]]*alias vpnon=/d;/^[[:space:]]*alias vpnoff=/d' ~/.bashrc
-
-unalias vpnon 2>/dev/null || true
-unalias vpnoff 2>/dev/null || true
-
-rm -f ~/Downloads/proton.conf
 
 # ------------------------------------------
 # Make sure we are running Bash
@@ -28,6 +18,8 @@ if [ -z "$BASH_VERSION" ]; then
     echo "ERROR: This script must be run with Bash."
     exit 1
 fi
+
+set -e
 
 # ------------------------------------------
 # Detect distribution
@@ -78,6 +70,62 @@ echo "Detected distribution family: $DISTRO"
 echo
 
 # ------------------------------------------
+# Find newest WireGuard config in Downloads
+# (done first, so nothing is changed if there is none)
+# ------------------------------------------
+
+# The Downloads folder can have a translated name (e.g. ~/Scaricati)
+DOWNLOADS="$HOME/Downloads"
+USER_DIRS="${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs"
+
+if command -v xdg-user-dir >/dev/null 2>&1; then
+    XDG_DL=$(xdg-user-dir DOWNLOAD 2>/dev/null || true)
+elif [ -f "$USER_DIRS" ]; then
+    XDG_DL=$(. "$USER_DIRS" 2>/dev/null; echo "${XDG_DOWNLOAD_DIR:-}")
+fi
+
+if [ -n "${XDG_DL:-}" ] && [ "$XDG_DL" != "$HOME" ] && [ -d "$XDG_DL" ]; then
+    DOWNLOADS="$XDG_DL"
+fi
+
+if [ ! -d "$DOWNLOADS" ]; then
+    echo "ERROR: Downloads folder not found: $DOWNLOADS"
+    exit 1
+fi
+
+is_wireguard_conf() {
+    grep -q '^[[:space:]]*\[Interface\]' "$1" &&
+    grep -q '^[[:space:]]*PrivateKey[[:space:]]*=' "$1" &&
+    grep -q '^[[:space:]]*\[Peer\]' "$1"
+}
+
+LATEST_CONF=""
+
+while IFS= read -r conf; do
+    if is_wireguard_conf "$conf"; then
+        LATEST_CONF="$conf"
+        break
+    fi
+done < <(find "$DOWNLOADS" \
+    -maxdepth 1 \
+    -type f \
+    -name '*.conf' \
+    -printf '%T@ %p\n' 2>/dev/null |
+    sort -nr |
+    cut -d' ' -f2-)
+
+if [ -z "$LATEST_CONF" ]; then
+    echo "ERROR: No WireGuard .conf file found in $DOWNLOADS"
+    echo "Download a WireGuard config from your ProtonVPN account and run this again."
+    echo "Nothing was changed."
+    exit 1
+fi
+
+echo "Found latest WireGuard config:"
+echo "$LATEST_CONF"
+echo
+
+# ------------------------------------------
 # Install required packages
 # ------------------------------------------
 
@@ -103,47 +151,29 @@ esac
 sudo systemctl enable --now NetworkManager
 
 # ------------------------------------------
-# Find newest .conf file in Downloads
-# ------------------------------------------
-
-DOWNLOADS="$HOME/Downloads"
-
-if [ ! -d "$DOWNLOADS" ]; then
-    echo "ERROR: ~/Downloads does not exist."
-    exit 1
-fi
-
-LATEST_CONF=$(find "$DOWNLOADS" \
-    -maxdepth 1 \
-    -type f \
-    -name '*.conf' \
-    ! -name 'proton.conf' \
-    -printf '%T@ %p\n' 2>/dev/null |
-    sort -nr |
-    head -n 1 |
-    cut -d' ' -f2-)
-
-if [ -z "$LATEST_CONF" ]; then
-    echo "ERROR: No .conf file found in ~/Downloads"
-    exit 1
-fi
-
-echo
-echo "Found latest WireGuard config:"
-echo "$LATEST_CONF"
-echo
-
-# ------------------------------------------
 # Create temporary valid filename
+# (the file name becomes the interface name, which must be short)
 # ------------------------------------------
 
-TEMP_CONF="$DOWNLOADS/proton.conf"
+TEMP_DIR=$(mktemp -d)
+TEMP_CONF="$TEMP_DIR/proton.conf"
 
-rm -f "$TEMP_CONF"
 cp "$LATEST_CONF" "$TEMP_CONF"
 
 # Make sure temporary file is removed if script exits
-trap 'rm -f "$TEMP_CONF"' EXIT
+trap 'rm -rf "$TEMP_DIR"' EXIT
+
+# ------------------------------------------
+# Remove existing "proton" connection(s)
+# so the new config replaces the old one
+# ------------------------------------------
+
+nmcli -t -f NAME,UUID connection show |
+    awk -F: '$1 == "proton" {print $2}' |
+    while IFS= read -r uuid; do
+        echo "Removing old proton connection ($uuid)"
+        sudo nmcli connection delete uuid "$uuid"
+    done
 
 # ------------------------------------------
 # Remember existing connections
@@ -157,9 +187,12 @@ BEFORE=$(nmcli -t -f UUID connection show)
 
 echo "Importing WireGuard configuration..."
 
-sudo nmcli connection import \
+if ! sudo nmcli connection import \
     type wireguard \
-    file "$TEMP_CONF"
+    file "$TEMP_CONF"; then
+    echo "ERROR: NetworkManager could not import $LATEST_CONF"
+    exit 1
+fi
 
 # ------------------------------------------
 # Find newly imported connection
@@ -178,31 +211,12 @@ if [ -z "$NEW_UUID" ]; then
 fi
 
 # ------------------------------------------
-# Remove existing "proton" connection
-# if it is not the newly imported one
-# ------------------------------------------
-
-EXISTING_UUID=$(nmcli -t -f NAME,UUID connection show |
-    awk -F: '$1 == "proton" {print $2; exit}')
-
-if [ -n "$EXISTING_UUID" ] && [ "$EXISTING_UUID" != "$NEW_UUID" ]; then
-    sudo nmcli connection delete uuid "$EXISTING_UUID"
-fi
-
-# ------------------------------------------
-# Rename imported connection to "proton"
+# Rename to "proton" and disable automatic connection
 # ------------------------------------------
 
 sudo nmcli connection modify \
     "$NEW_UUID" \
-    connection.id "proton"
-
-# ------------------------------------------
-# Disable automatic connection
-# ------------------------------------------
-
-sudo nmcli connection modify \
-    proton \
+    connection.id "proton" \
     connection.autoconnect no
 
 # ------------------------------------------
@@ -211,8 +225,12 @@ sudo nmcli connection modify \
 
 BASHRC="$HOME/.bashrc"
 
-sed -i '/^[[:space:]]*alias vpnon=/d' "$BASHRC"
-sed -i '/^[[:space:]]*alias vpnoff=/d' "$BASHRC"
+touch "$BASHRC"
+
+sed -i '/^[[:space:]]*# ProtonVPN WireGuard$/d;/^[[:space:]]*alias vpnon=/d;/^[[:space:]]*alias vpnoff=/d' "$BASHRC"
+
+# Remove blank lines left at the end, so re-runs don't pile them up
+sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$BASHRC"
 
 cat >> "$BASHRC" <<'EOF'
 
@@ -220,18 +238,6 @@ cat >> "$BASHRC" <<'EOF'
 alias vpnon='sudo nmcli connection up proton'
 alias vpnoff='sudo nmcli connection down proton'
 EOF
-
-# ------------------------------------------
-# Final autoconnect setting
-# ------------------------------------------
-
-sudo nmcli connection modify proton connection.autoconnect no
-
-# ------------------------------------------
-# Reload Bash configuration
-# ------------------------------------------
-
-source "$HOME/.bashrc"
 
 # ------------------------------------------
 # Finish
@@ -254,7 +260,7 @@ echo
 echo "Automatic connection:"
 echo "disabled"
 echo
-echo "Commands:"
+echo "Commands (open a new terminal first, or run: source ~/.bashrc):"
 echo
 echo "  vpnon   -> Connect to ProtonVPN"
 echo "  vpnoff  -> Disconnect from ProtonVPN"
